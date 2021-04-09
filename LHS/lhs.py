@@ -6,14 +6,31 @@ doi:10.2307/2291014
 
 from numpy import *
 from scipy import stats
+from scipy.linalg import solve_triangular
 
-lhs = lambda n,d: array([(random.permutation(n)+.5)/n for j in range(d)],dtype=float64).T
+def lhs(n,d): 
+    x = array([(random.permutation(n)+.5)/n for j in range(d)],dtype=float64).T
+    return x
 
 def lhs_rc(n,d):
     U = random.rand(n,d)
-    Z = array([stats.norm.ppf((random.permutation(n)+1)/(n+1) for j in range(d)],dtype=float64).T
-    print(U.shape,Z.shape)
-
+    trys = 0
+    while True:
+        Z = array([stats.norm.ppf((random.permutation(n)+1)/(n+1)) for j in range(d)],dtype=float64).T
+        C = cov(Z.T)
+        rank = linalg.matrix_rank(C)
+        if rank==d: break
+        trys += 1
+        if trys>=10: raise Exception("C not full rank after many tries.")
+    Q = linalg.cholesky(C)
+    Qinv = solve_triangular(Q,eye(d),lower=True,check_finite=False)
+    Zstar = Z@Qinv
+    for j in range(d):
+        u = U[:,j]
+        z = Z[:,j]
+        ranks = stats.rankdata(z).astype(int)-1
+        args = argsort(u)
+        U[:,j] = u[args[ranks]]
 
 def lhs_rgs(n,d,niter):
     x = lhs(n,d)
@@ -23,12 +40,12 @@ def lhs_rgs(n,d,niter):
         for j in range(1,d):
             for k in range(j):
                 x[:,k] = _takeout(x[:,j],x[:,k])
-            x[:,k] = (argsort(x[:,k])+.5)/n-.5
+            x[:,k] = (stats.rankdata(x[:,k])-.5)/n-.5#(argsort(x[:,k])+.5)/n#-.5 # use rankdata instead? 
         # backward
         for j in range(d-2,-1,-1):
             for k in range(d-1,j,-1):
                 x[:,k] = _takeout(x[:,j],x[:,k])
-            x[:,k] = (argsort(x[:,k])+.5)/n-.5
+            x[:,k] = (stats.rankdata(x[:,k])-.5)/n-.5#(argsort(x[:,k])+.5)/n#-.5 # use rankdata instead? 
     x += .5 # restore mean
     return x
 
@@ -58,8 +75,12 @@ def _test_single(n,d):
     RGS = PTS()
     RGS.name = 'LHS-RGS'
     RGS.x = lhs_rgs(n,d,niter=1)
+    RC = PTS()
+    RC.name = 'LHS-RC'
+    RC.x = lhs_rc(n,d)
+    objs = [LHS,RC,RGS]
     shift = lambda s,t: str(s).replace('\n','\n'+('\t'*t))
-    for obj in [LHS,RGS]:
+    for obj in objs:
         obj.corr,obj.rho = _get_corr_rho(obj.x,d)
         print('%s\n\n\tx:\n\t\t%s\n\n\tcorr:\n\t\t%s\n\n\trho: %.1e\n'%\
             (obj.name,shift(obj.x,2),shift(obj.corr,2),obj.rho))
@@ -67,8 +88,8 @@ def _test_single(n,d):
         print('d!=2 --> no single test plot produced.')
         return
     from matplotlib import pyplot
-    fig,ax = pyplot.subplots(nrows=1,ncols=2,figsize=(10,5))
-    for i,obj in enumerate([LHS,RGS]):
+    fig,ax = pyplot.subplots(nrows=1,ncols=len(objs),figsize=(5*len(objs),5))
+    for i,obj in enumerate(objs):
         ax[i].scatter(obj.x[:,0],obj.x[:,1])
         for j in range(n-1):
             ax[i].axhline(y=(j+1)/n)
@@ -92,7 +113,7 @@ def _test_multi(ses,niter,d,trials):
         if dog==False:
             d = n-1
         for t in range(trials):
-            x_lhs = lhs_og(n,d)
+            x_lhs = lhs(n,d)
             rho_lhs[s,t] = _get_corr_rho(x_lhs,d)[1]
             x_rgs = lhs_rgs(n,d,niter=niter)
             rho_rgs[s,t] = _get_corr_rho(x_rgs,d)[1]
@@ -116,10 +137,10 @@ def _test_multi(ses,niter,d,trials):
     fig.savefig('rho_%d.png'%dog)
 
 if __name__ == '__main__':
-    '''
     _test_single(
         n = 8, # samples size
         d = 2) # dimension. will only create a plot if d==2
+    '''
     _test_multi(
         ses = 2**arange(3,6), # sample sizes
         niter = 7, # iterations for RGS
