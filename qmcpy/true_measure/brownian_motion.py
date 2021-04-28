@@ -48,6 +48,7 @@ class BrownianMotion(Gaussian):
             self.domain = array([[-inf,inf]])
             self._transform = self._transform_std_gaussian
             self._jacobian = self._jacobian_std_gaussian
+        self.nearest_pd = False
         self._parse_sampler(sampler)
         self.t = t_final # exercise time
         self.drift = drift

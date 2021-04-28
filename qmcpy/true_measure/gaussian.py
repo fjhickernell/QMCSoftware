@@ -4,6 +4,8 @@ from ..util import TransformError,DimensionError, ParameterError
 from ..discrete_distribution import Sobol
 from numpy import *
 from numpy.linalg import cholesky, det, inv, eigh
+import numpy as np
+from numpy import linalg as la
 from scipy.stats import norm
 from scipy.special import erfcinv
 
@@ -26,7 +28,7 @@ class Gaussian(TrueMeasure):
         decomp_type     pca
     """
 
-    def __init__(self, sampler, mean=0., covariance=1., decomp_type='PCA'):
+    def __init__(self, sampler, mean=0., covariance=1., decomp_type='PCA', nearest_pd=False):
         """
         Args:
             sampler (DiscreteDistribution/TrueMeasure): A 
@@ -38,6 +40,10 @@ class Gaussian(TrueMeasure):
             decomp_type (str): method of decomposition either  
                 "PCA" for principal component analysis or 
                 "Cholesky" for cholesky decomposition.
+            nearest_pd (bool): If True, find the nearest positive definite matrix 
+                to the supplied covariance matrix. If True, the 'nearestPD' method 
+                (defined after this class in this file)
+                will be run regardless of if the supplied covariance matrix is PD.
         """
         self.parameters = ['mean', 'covariance', 'decomp_type']
         # default to transform from standard uniform
@@ -49,6 +55,7 @@ class Gaussian(TrueMeasure):
             self.domain = array([[-inf,inf]])
             self._transform = self._transform_std_gaussian
             self._jacobian = self._jacobian_std_gaussian
+        self.nearest_pd = nearest_pd
         self._parse_sampler(sampler)
         self.decomp_type = decomp_type.lower()
         self._set_mean_cov(mean,covariance)
@@ -70,6 +77,8 @@ class Gaussian(TrueMeasure):
             raise DimensionError('''
                     mean must have length d and
                     covariance must be of shape d x d''')
+        if self.nearest_pd:
+            self.sigma = nearestPD(self.sigma)
         self._set_constants()
     
     def _set_constants(self):
@@ -115,4 +124,59 @@ class Gaussian(TrueMeasure):
         self.mu = tile(m,int(self.d))
         self.sigma = c*eye(int(self.d))
         self._set_constants()
+
+
+def nearestPD(A):
+    """
+    Find the nearest positive-definite matrix to input
+
+    see: https://gist.github.com/fasiha/fdb5cec2054e6f1c6ae35476045a0bbd
+
+    A Python/Numpy port of John D'Errico's `nearestSPD` MATLAB code [1], which
+    credits [2].
+
+    [1] https://www.mathworks.com/matlabcentral/fileexchange/42885-nearestspd
+
+    [2] N.J. Higham, "Computing a nearest symmetric positive semidefinite
+    matrix" (1988): https://doi.org/10.1016/0024-3795(88)90223-6
+    """
+
+    B = (A + A.T) / 2
+    _, s, V = la.svd(B)
+
+    H = np.dot(V.T, np.dot(np.diag(s), V))
+
+    A2 = (B + H) / 2
+
+    A3 = (A2 + A2.T) / 2
+
+    if isPD(A3):
+        return A3
+
+    spacing = np.spacing(la.norm(A))
+    # The above is different from [1]. It appears that MATLAB's `chol` Cholesky
+    # decomposition will accept matrixes with exactly 0-eigenvalue, whereas
+    # Numpy's will not. So where [1] uses `eps(mineig)` (where `eps` is Matlab
+    # for `np.spacing`), we use the above definition. CAVEAT: our `spacing`
+    # will be much larger than [1]'s `eps(mineig)`, since `mineig` is usually on
+    # the order of 1e-16, and `eps(1e-16)` is on the order of 1e-34, whereas
+    # `spacing` will, for Gaussian random matrixes of small dimension, be on
+    # othe order of 1e-16. In practice, both ways converge, as the unit test
+    # below suggests.
+    I = np.eye(A.shape[0])
+    k = 1
+    while not isPD(A3):
+        mineig = np.min(np.real(la.eigvals(A3)))
+        A3 += I * (-mineig * k**2 + spacing)
+        k += 1
+
+    return A3
+
+def isPD(B):
+    """Returns true when input is positive-definite, via Cholesky"""
+    try:
+        _ = la.cholesky(B)
+        return True
+    except la.LinAlgError:
+        return False
     
